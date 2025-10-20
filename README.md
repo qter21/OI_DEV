@@ -1,8 +1,8 @@
-# Legal Code Citation Validator - Documentation Suite
+# California Legal Citation Validator - OpenWebUI Filter
 
-## 📚 Documentation Overview
+## 📚 Overview
 
-This directory contains comprehensive documentation for the **California Legal Code Citation Validator Pipeline** - an Open WebUI enhancement that prevents hallucination in legal code citations.
+This repository contains the **California Legal Code Citation Validator** - an OpenWebUI filter that prevents hallucination in legal code citations by providing exact MongoDB lookups for California legal codes.
 
 ---
 
@@ -80,31 +80,40 @@ Follow the deployment checklist in **ARCHITECTURE_DESIGN.md** (lines 777-836).
 
 ---
 
-## 🚀 What This Pipeline Does
+## 🚀 What This Filter Does
 
 ### The Problem
 Legal AI assistants hallucinate code citations, citing sections that don't exist (e.g., "Penal Code 999999").
 
 ### The Solution
-A two-layer defense system:
+A dual-layer defense system that enhances OpenWebUI's RAG:
 
 ```
 ┌──────────────────────────────────────┐
-│     Open WebUI's RAG (Layer 1)      │
+│     OpenWebUI's RAG (Layer 1)        │
 │  • Semantic search                   │
 │  • Contextual understanding          │
 └────────────┬─────────────────────────┘
              │
 ┌────────────▼─────────────────────────┐
-│  Citation Validator Pipeline (Layer 2)│
-│  • Detects citations in queries      │
-│  • Adds exact MongoDB text           │
-│  • Validates all citations           │
-│  • Marks ✓ (verified) or ⚠️ (invalid)│
+│  Citation Validator Filter (Layer 2) │
+│  • Pre-retrieval (inlet): Detects    │
+│    citations & injects exact text    │
+│  • Post-validation (outlet): Verifies│
+│    LLM citations & marks accuracy    │
 └──────────────────────────────────────┘
 ```
 
 **Result:** Hybrid system with semantic understanding + citation accuracy
+
+### Features
+- ✅ **Pre-retrieval (inlet)**: Detects citation requests and fetches exact statutory text from MongoDB
+- ✅ **Post-validation (outlet)**: Validates all citations in LLM responses
+- ✅ **8 California Codes**: FAM, EVID, CCP, PEN, GOV, PROB, WIC, VEH
+- ✅ **Multiple Citation Formats**: Handles various citation styles
+- ✅ **Visual Feedback**: Marks verified (✓) vs unverified (⚠️) citations
+- ✅ **Lazy Initialization**: MongoDB connection on-demand
+- ✅ **Error Handling**: Graceful degradation if MongoDB unavailable
 
 ---
 
@@ -275,22 +284,70 @@ For: DevOps, support engineers
 
 ---
 
-## 🚀 Ready for Production
+## 🚀 Deployment
 
-**You can deploy this immediately.**
+### Prerequisites
+- OpenWebUI instance (v0.1.0+)
+- MongoDB with `ca_codes_db` database containing California legal codes
+- Network access between OpenWebUI and MongoDB
 
-The pipeline is:
-- ✅ Fully implemented (92% complete)
-- ✅ Tested with actual database
-- ✅ Documented comprehensively
-- ✅ Ready to integrate with Open WebUI
+### Quick Start
 
-**Next steps:**
-1. Copy pipeline code from ARCHITECTURE_DESIGN.md
-2. Follow deployment checklist
-3. Test with provided test cases
-4. Enable monitoring
-5. Deploy!
+1. **Upload Filter to OpenWebUI**
+   - Navigate to **Workspace** → **Functions**
+   - Click **"+"** to add new function
+   - Upload `legal_citation_validator.py`
+
+2. **Configure MongoDB Connection**
+   - Go to filter **Valves** settings
+   - Set `mongodb_uri` to your MongoDB connection string
+   - Example: `mongodb://admin:password@10.168.0.6:27017`
+   - Set `mongodb_db` to `ca_codes_db`
+   - Set `mongodb_collection` to `section_contents`
+
+3. **Enable Debug Mode (Optional)**
+   - Set `debug_mode` to `true` for detailed logs
+   - Check OpenWebUI container logs to verify connection
+
+4. **Test the Filter**
+   - Ask: "What does Evidence Code 771 say?"
+   - Should see exact statutory text with ✓ mark
+   - Check logs for `[INLET]` and `[OUTLET]` messages
+
+### Deployment Status
+- ✅ **Code**: Production-ready, deployed on GCloud
+- ✅ **Database**: 8 California codes, 50,000+ sections
+- ✅ **Testing**: Verified with real queries (EVID 771, FAM 771, etc.)
+- ✅ **Documentation**: Complete implementation guide
+- ✅ **Monitoring**: Debug logging with query tracking
+
+### Common Issues & Solutions
+
+**Issue 1: Filter not triggering**
+- **Symptom**: No `[INLET]` or `[OUTLET]` logs, citations not validated
+- **Cause**: Filter not enabled for the specific model/agent
+- **Solution**: Enable filter in model settings or use a different chat without custom agents
+
+**Issue 2: MongoDB connection errors**
+- **Symptom**: `Name or service not known` or connection timeouts
+- **Cause**: Incorrect MongoDB URI or network connectivity
+- **Solution**:
+  - Use internal IP addresses if on same VPC (e.g., `10.168.0.6:27017`)
+  - Check firewall rules allow MongoDB port (27017)
+  - Verify MongoDB is running: `docker ps | grep mongodb`
+
+**Issue 3: Filter loads but doesn't validate**
+- **Symptom**: Filter loaded successfully but citations show ⚠️ instead of ✓
+- **Cause**: MongoDB connection established but query failing
+- **Solution**:
+  - Enable `debug_mode` in Valves
+  - Check logs for `[QUERY]` and `[DB FETCH]` messages
+  - Verify database name and collection name match your MongoDB setup
+
+**Issue 4: Container restart needed**
+- **Symptom**: Valve configuration changes not taking effect
+- **Cause**: OpenWebUI caches filter configuration
+- **Solution**: Restart container: `docker restart <container_name>`
 
 ---
 
@@ -311,7 +368,17 @@ For questions about:
 
 ---
 
-*Last Updated: October 20, 2025*  
-*Pipeline Version: 2.0.0*  
+## 🔗 Links
+
+- **GitHub Repository**: https://github.com/qter21/OI_DEV
+- **OpenWebUI**: https://openwebui.com
+- **Deployed Instance**: `danshari-v-25.us-west2-a` (GCP)
+- **MongoDB Instance**: `codecond.us-west2-a` (GCP)
+
+---
+
+*Last Updated: October 20, 2025*
+*Filter Version: 1.0.0*
+*Status: Production - Deployed*
 *Documentation Suite: Complete*
 
