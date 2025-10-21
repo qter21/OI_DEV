@@ -1,10 +1,19 @@
 """
 title: California Legal Code Citation Validator
 author: Legal AI Team
-version: 2.6.3
+version: 2.6.4
 description: Production-ready filter for hallucination-free legal citations with input sanitization
 required_open_webui_version: 0.3.0
 requirements: pymongo>=4.0.0
+
+✨ ENHANCEMENT (v2.6.4):
+- COMPREHENSIVE VERIFICATION DISPLAY - Multi-layered citation validation UI
+  • Top banner: Prominent verification status (✅ ALL VERIFIED or ⚠️ ALERT)
+  • Bold citations: **EVID 761 ✓** instead of subtle checkmarks
+  • Professional summary table: Detailed breakdown of all citations
+  • Clear legend: Explains symbols and database source
+- Makes verification status IMPOSSIBLE to miss
+- Provides professional audit trail for legal research
 
 🐛 BUGFIX (v2.6.3):
 - Fixed inlet skip logic missing code abbreviations (evid, fam, ccp, gov, corp, prob)
@@ -370,7 +379,7 @@ class Filter:
         """Initialize MongoDB connection (non-blocking)"""
         # LOG VERSION IMMEDIATELY ON STARTUP
         logger.info("=" * 80)
-        logger.info("🔧 California Legal Citation Validator v2.6.3 - STARTING UP")
+        logger.info("🔧 California Legal Citation Validator v2.6.4 - STARTING UP")
         logger.info("=" * 80)
 
         try:
@@ -859,7 +868,7 @@ Location: {hierarchy_str}
         __model__: Optional[dict] = None,
     ) -> dict:
         """Pre-process user queries to detect direct citation requests"""
-        logger.info("[INLET v2.6.3] Processing query...")
+        logger.info("[INLET v2.6.4] Processing query...")
         self.metrics["total_queries"] += 1
         self._update_cache_config()
 
@@ -1052,10 +1061,10 @@ Now provide your answer using ONLY the verified content above:"""
         """
         # CRITICAL: Return immediately if disabled
         if not self.valves.enable_post_validation:
-            logger.info("[OUTLET v2.6.3] Post-validation DISABLED - skipping outlet processing")
+            logger.info("[OUTLET v2.6.4] Post-validation DISABLED - skipping outlet processing")
             return body
 
-        logger.info("[OUTLET v2.6.3] ===== POST-VALIDATION STARTING =====")
+        logger.info("[OUTLET v2.6.4] ===== POST-VALIDATION STARTING =====")
         
         # CRITICAL: Skip outlet for streaming responses to avoid freezing
         if isinstance(body, dict) and body.get("stream", False):
@@ -1246,54 +1255,111 @@ The AI model's response contradicted verified database information. Here is the 
                 
                 validated_response = assistant_message
                 hallucinations_found = []
+                verified_citations = []  # Track verified citations for summary
                 verified_count = 0
-                
+
                 for citation in citations:
                     key = f"{citation['code']}-{citation['section']}"
-                    
+
                     if key in section_map:
-                        # Citation exists in database - add verification badge
+                        # Citation exists in database - add BOLD verification badge
                         verified_count += 1
                         self.metrics["citations_validated"] += 1
+                        verified_citations.append({
+                            "citation": citation["full_citation"],
+                            "code": citation["code"],
+                            "section": citation["section"],
+                            "code_name": section_map[key].get("code_name", citation["code"])
+                        })
+
+                        # Make it BOLD and add checkmark for visibility
                         validated_response = validated_response.replace(
                             citation["full_citation"],
-                            f"{citation['full_citation']} ✓",
+                            f"**{citation['full_citation']} ✓**",
                             1  # Replace only first occurrence
                         )
                     else:
                         # Citation does not exist in database - flag it
-                        hallucinations_found.append(citation["full_citation"])
+                        hallucinations_found.append({
+                            "citation": citation["full_citation"],
+                            "code": citation["code"],
+                            "section": citation["section"]
+                        })
                         self.metrics["hallucinations_found"] += 1
-                        
-                        # Replace or flag the hallucinated citation
+
+                        # Replace with BOLD strikethrough and warning
                         validated_response = validated_response.replace(
                             citation["full_citation"],
-                            f"~~{citation['full_citation']}~~ ⚠️",
+                            f"**~~{citation['full_citation']}~~ ⚠️ UNVERIFIED**",
                             1
                         )
                 
-                # Add validation summary if hallucinations found
+                # BUILD COMPREHENSIVE VERIFICATION DISPLAY (v2.6.4)
+                verification_display = ""
+
+                # 1. TOP BANNER - Prominent status indicator
                 if hallucinations_found:
-                    validation_note = f"\n\n---\n⚠️ **VALIDATION SYSTEM: Hallucinations Detected and Corrected**\n\n"
-                    validation_note += f"The citation validation system found **{len(hallucinations_found)} citation(s)** that could NOT be verified in the California codes database:\n\n"
-                    for cite in hallucinations_found:
-                        validation_note += f"- ~~{cite}~~ ⚠️ (marked as unverified)\n"
-                    validation_note += f"\n**Corrections Made:**\n"
-                    validation_note += f"- Unverified citations have been marked with strikethrough (~~text~~) and ⚠️ warning symbol\n"
-                    validation_note += f"- Verified citations are marked with ✓ checkmark\n"
-                    validation_note += f"\n**Action Required:** Please verify the flagged citations independently before relying on them.\n"
-                    validation_note += f"\n**Summary:** {verified_count} verified ✓ | {len(hallucinations_found)} flagged ⚠️"
-                    validated_response += validation_note
-                
+                    banner = f"\n\n{'━' * 80}\n"
+                    banner += f"⚠️  **CITATION VALIDATION ALERT** ⚠️\n"
+                    banner += f"{'━' * 80}\n"
+                    banner += f"**Status:** {verified_count} verified ✓ | {len(hallucinations_found)} UNVERIFIED ⚠️\n"
+                    banner += f"**Action Required:** Review flagged citations before relying on them\n"
+                    banner += f"{'━' * 80}\n\n"
+                    verification_display = banner + validated_response
+                else:
+                    banner = f"\n\n{'━' * 80}\n"
+                    banner += f"✅ **ALL CITATIONS VERIFIED** ✅\n"
+                    banner += f"{'━' * 80}\n"
+                    banner += f"**Status:** All {verified_count} citation(s) confirmed in California Codes Database\n"
+                    banner += f"**Confidence:** 100% - All legal code references verified\n"
+                    banner += f"{'━' * 80}\n\n"
+                    verification_display = banner + validated_response
+
+                # 2. SUMMARY TABLE - Professional citation breakdown
+                summary_table = f"\n\n{'━' * 80}\n"
+                summary_table += f"📋 **CITATION VERIFICATION SUMMARY**\n"
+                summary_table += f"{'━' * 80}\n\n"
+
+                if verified_citations:
+                    summary_table += f"### ✓ Verified Citations ({len(verified_citations)})\n\n"
+                    summary_table += f"| Citation | Code | Status | Database |\n"
+                    summary_table += f"|----------|------|--------|----------|\n"
+                    for vc in verified_citations:
+                        code_name = vc['code_name']
+                        summary_table += f"| **{vc['citation']}** | California {code_name} Code | ✅ VERIFIED | MongoDB |\n"
+                    summary_table += f"\n"
+
+                if hallucinations_found:
+                    summary_table += f"### ⚠️ Unverified Citations ({len(hallucinations_found)})\n\n"
+                    summary_table += f"| Citation | Attempted Code | Status | Issue |\n"
+                    summary_table += f"|----------|----------------|--------|-------|\n"
+                    for hc in hallucinations_found:
+                        summary_table += f"| **~~{hc['citation']}~~** | {hc['code']} {hc['section']} | ❌ NOT FOUND | Does not exist in database |\n"
+                    summary_table += f"\n**⚠️ WARNING:** These citations could not be verified. They may be:\n"
+                    summary_table += f"- Incorrect section numbers\n"
+                    summary_table += f"- Misattributed to the wrong code\n"
+                    summary_table += f"- Repealed or obsolete sections\n"
+                    summary_table += f"- AI hallucinations\n\n"
+
+                # 3. LEGEND - Explain the symbols
+                summary_table += f"{'─' * 80}\n"
+                summary_table += f"**Legend:**\n"
+                summary_table += f"- **Bold ✓** = Verified in California Codes Database (reliable)\n"
+                summary_table += f"- **~~Strikethrough~~ ⚠️** = Unverified (use caution)\n"
+                summary_table += f"- Database: MongoDB @ 10.168.0.6 (ca_codes_db.section_contents)\n"
+                summary_table += f"{'━' * 80}\n"
+
+                verification_display += summary_table
+
                 logger.info(f"[OUTLET] Verified: {verified_count}, Hallucinations: {len(hallucinations_found)}")
-                
+
                 # Show completion status
                 if self.valves.show_status and __event_emitter__:
                     if hallucinations_found:
                         status_msg = f"⚠️ CORRECTIONS MADE: {verified_count} verified ✓ | {len(hallucinations_found)} flagged ⚠️"
                     else:
                         status_msg = f"✓ All {verified_count} citation(s) verified"
-                    
+
                     await __event_emitter__({
                         "type": "status",
                         "data": {
@@ -1301,7 +1367,7 @@ The AI model's response contradicted verified database information. Here is the 
                             "done": True
                         }
                     })
-                
+
                 # Show performance metrics if enabled
                 if self.valves.show_performance_metrics:
                     cache_stats = self.section_cache.get_stats()
@@ -1311,8 +1377,9 @@ The AI model's response contradicted verified database information. Here is the 
                         f"Validated: {self.metrics['citations_validated']} | "
                         f"Hallucinations: {self.metrics['hallucinations_found']}"
                     )
-                
-                messages[-1]["content"] = validated_response
+
+                # Use the comprehensive verification display
+                messages[-1]["content"] = verification_display
                 body["messages"] = messages
             
             # Clean up request cache (regardless of whether contradiction was found)
