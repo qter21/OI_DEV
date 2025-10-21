@@ -1,19 +1,25 @@
 """
 title: California Legal Code Citation Validator
 author: Legal AI Team
-version: 2.6.5
+version: 2.6.6
 description: Production-ready filter for hallucination-free legal citations with input sanitization
 required_open_webui_version: 0.3.0
 requirements: pymongo>=4.0.0
 
-⚡ PERFORMANCE (v2.6.5):
+🐛 BUGFIX (v2.6.6):
+- Fixed LLM ignoring verified database content and giving "consult the code" recommendations
+- Strengthened inlet instructions to prevent fallback to general knowledge
+- Added explicit "DO NOT recommend other sources" directive
+- User feedback: LLM was saying "consult Evidence Code directly" despite having the actual text
+
+⚡ PERFORMANCE (v2.6.6):
 - FAST MODE - Removed banner and summary table for maximum speed
 - Only inline badges remain: **EVID 761 ✓** or **~~EVID 999~~ ⚠️ UNVERIFIED**
 - Much faster response times - no extra processing after LLM
 - User feedback: "response is much slower than previous version" - FIXED
 
-✨ ENHANCEMENT (v2.6.5):
-- Comprehensive verification display (removed in v2.6.5 for speed)
+✨ ENHANCEMENT (v2.6.6):
+- Comprehensive verification display (removed in v2.6.6 for speed)
 - Bold citations and verification badges
 - User-friendly language (no technical database details)
 
@@ -381,7 +387,7 @@ class Filter:
         """Initialize MongoDB connection (non-blocking)"""
         # LOG VERSION IMMEDIATELY ON STARTUP
         logger.info("=" * 80)
-        logger.info("🔧 California Legal Citation Validator v2.6.5 - STARTING UP")
+        logger.info("🔧 California Legal Citation Validator v2.6.6 - STARTING UP")
         logger.info("=" * 80)
 
         try:
@@ -870,7 +876,7 @@ Location: {hierarchy_str}
         __model__: Optional[dict] = None,
     ) -> dict:
         """Pre-process user queries to detect direct citation requests"""
-        logger.info("[INLET v2.6.5] Processing query...")
+        logger.info("[INLET v2.6.6] Processing query...")
         self.metrics["total_queries"] += 1
         self._update_cache_config()
 
@@ -962,25 +968,26 @@ Location: {hierarchy_str}
                     code_name = exact_sections[0].get('code_name', exact_sections[0]['code'])
 
                     # Create a user-friendly enriched message with verified badges
-                    enriched_message = f"""The following California legal code section has been verified as accurate:
+                    enriched_message = f"""You have direct access to the official California Legal Codes database. The user asked about a specific section that has been retrieved:
 
-VERIFIED SECTION:
+VERIFIED SECTION FROM DATABASE:
 {verified_codes[0]} - California {code_name} Code
 
-OFFICIAL CONTENT:
+OFFICIAL LEGAL TEXT:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {context}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 USER'S QUESTION: {self.sanitize_user_input(user_message)}
 
-INSTRUCTIONS:
-Answer the user's question based on the verified content above. Your response must:
-1. Begin with: "**California {code_name} Code Section {exact_sections[0]['section']} ✓**"
-2. Use ONLY the verified content provided
-3. Do NOT mention other codes or sections not shown above
+CRITICAL INSTRUCTIONS:
+1. Start your response with: "**California {code_name} Code Section {exact_sections[0]['section']} ✓**"
+2. Answer using the exact legal text provided above
+3. DO NOT say "I don't have access" - you DO have the official text above
+4. DO NOT recommend consulting other sources - you already have the authoritative source
+5. DO NOT suggest the user look elsewhere - answer directly from the verified content
 
-Provide your answer:"""
+Answer the question now using the official legal text provided:"""
                     
                     messages[-1]["content"] = enriched_message
 
@@ -1061,10 +1068,10 @@ Provide your answer:"""
         """
         # CRITICAL: Return immediately if disabled
         if not self.valves.enable_post_validation:
-            logger.info("[OUTLET v2.6.5] Post-validation DISABLED - skipping outlet processing")
+            logger.info("[OUTLET v2.6.6] Post-validation DISABLED - skipping outlet processing")
             return body
 
-        logger.info("[OUTLET v2.6.5] ===== POST-VALIDATION STARTING =====")
+        logger.info("[OUTLET v2.6.6] ===== POST-VALIDATION STARTING =====")
         
         # CRITICAL: Skip outlet for streaming responses to avoid freezing
         if isinstance(body, dict) and body.get("stream", False):
@@ -1294,7 +1301,7 @@ The AI model's response contradicted verified database information. Here is the 
                             1
                         )
                 
-                # FAST MODE - Just inline badges, no banner/summary (v2.6.5)
+                # FAST MODE - Just inline badges, no banner/summary (v2.6.6)
                 verification_display = validated_response
 
                 logger.info(f"[OUTLET] Verified: {verified_count}, Hallucinations: {len(hallucinations_found)}")
