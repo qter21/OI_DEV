@@ -1,10 +1,15 @@
 """
 title: California Legal Code Citation Validator
 author: Legal AI Team
-version: 2.6.2
+version: 2.6.3
 description: Production-ready filter for hallucination-free legal citations with input sanitization
 required_open_webui_version: 0.3.0
 requirements: pymongo>=4.0.0
+
+🐛 BUGFIX (v2.6.3):
+- Fixed inlet skip logic missing code abbreviations (evid, fam, ccp, gov, corp, prob)
+- Inlet now processes queries like "what does EVID 761 say?"
+- Ensures all 8 California codes trigger inlet processing
 
 🔍 IMPROVEMENT (v2.6.2):
 - Added version logging on startup, inlet, and outlet
@@ -365,7 +370,7 @@ class Filter:
         """Initialize MongoDB connection (non-blocking)"""
         # LOG VERSION IMMEDIATELY ON STARTUP
         logger.info("=" * 80)
-        logger.info("🔧 California Legal Citation Validator v2.6.2 - STARTING UP")
+        logger.info("🔧 California Legal Citation Validator v2.6.3 - STARTING UP")
         logger.info("=" * 80)
 
         try:
@@ -614,7 +619,8 @@ Return ONLY valid JSON in this exact format:
             return True, "too_short"
         
         # Quick heuristic: Check if message contains legal keywords
-        legal_keywords = ["code", "section", "law", "statute", "pen", "civ", "§"]
+        legal_keywords = ["code", "section", "law", "statute", "§",
+                          "pen", "civ", "ccp", "fam", "evid", "gov", "corp", "prob"]
         has_legal_context = any(kw in user_message.lower() for kw in legal_keywords)
         
         if not has_legal_context:
@@ -853,7 +859,7 @@ Location: {hierarchy_str}
         __model__: Optional[dict] = None,
     ) -> dict:
         """Pre-process user queries to detect direct citation requests"""
-        logger.info("[INLET v2.6.2] Processing query...")
+        logger.info("[INLET v2.6.3] Processing query...")
         self.metrics["total_queries"] += 1
         self._update_cache_config()
 
@@ -1046,10 +1052,10 @@ Now provide your answer using ONLY the verified content above:"""
         """
         # CRITICAL: Return immediately if disabled
         if not self.valves.enable_post_validation:
-            logger.info("[OUTLET v2.6.2] Post-validation DISABLED - skipping outlet processing")
+            logger.info("[OUTLET v2.6.3] Post-validation DISABLED - skipping outlet processing")
             return body
 
-        logger.info("[OUTLET v2.6.2] ===== POST-VALIDATION STARTING =====")
+        logger.info("[OUTLET v2.6.3] ===== POST-VALIDATION STARTING =====")
         
         # CRITICAL: Skip outlet for streaming responses to avoid freezing
         if isinstance(body, dict) and body.get("stream", False):
