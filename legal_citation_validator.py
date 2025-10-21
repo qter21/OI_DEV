@@ -1,19 +1,21 @@
 """
 title: California Legal Code Citation Validator
 author: Legal AI Team
-version: 2.6.4
+version: 2.6.5
 description: Production-ready filter for hallucination-free legal citations with input sanitization
 required_open_webui_version: 0.3.0
 requirements: pymongo>=4.0.0
 
-✨ ENHANCEMENT (v2.6.4):
-- COMPREHENSIVE VERIFICATION DISPLAY - Multi-layered citation validation UI
-  • Top banner: Prominent verification status (✅ ALL VERIFIED or ⚠️ ALERT)
-  • Bold citations: **EVID 761 ✓** instead of subtle checkmarks
-  • Professional summary table: Detailed breakdown of all citations
-  • Clear legend: Explains symbols and database source
-- Makes verification status IMPOSSIBLE to miss
-- Provides professional audit trail for legal research
+⚡ PERFORMANCE (v2.6.5):
+- FAST MODE - Removed banner and summary table for maximum speed
+- Only inline badges remain: **EVID 761 ✓** or **~~EVID 999~~ ⚠️ UNVERIFIED**
+- Much faster response times - no extra processing after LLM
+- User feedback: "response is much slower than previous version" - FIXED
+
+✨ ENHANCEMENT (v2.6.5):
+- Comprehensive verification display (removed in v2.6.5 for speed)
+- Bold citations and verification badges
+- User-friendly language (no technical database details)
 
 🐛 BUGFIX (v2.6.3):
 - Fixed inlet skip logic missing code abbreviations (evid, fam, ccp, gov, corp, prob)
@@ -379,7 +381,7 @@ class Filter:
         """Initialize MongoDB connection (non-blocking)"""
         # LOG VERSION IMMEDIATELY ON STARTUP
         logger.info("=" * 80)
-        logger.info("🔧 California Legal Citation Validator v2.6.4 - STARTING UP")
+        logger.info("🔧 California Legal Citation Validator v2.6.5 - STARTING UP")
         logger.info("=" * 80)
 
         try:
@@ -868,7 +870,7 @@ Location: {hierarchy_str}
         __model__: Optional[dict] = None,
     ) -> dict:
         """Pre-process user queries to detect direct citation requests"""
-        logger.info("[INLET v2.6.4] Processing query...")
+        logger.info("[INLET v2.6.5] Processing query...")
         self.metrics["total_queries"] += 1
         self._update_cache_config()
 
@@ -1059,10 +1061,10 @@ Provide your answer:"""
         """
         # CRITICAL: Return immediately if disabled
         if not self.valves.enable_post_validation:
-            logger.info("[OUTLET v2.6.4] Post-validation DISABLED - skipping outlet processing")
+            logger.info("[OUTLET v2.6.5] Post-validation DISABLED - skipping outlet processing")
             return body
 
-        logger.info("[OUTLET v2.6.4] ===== POST-VALIDATION STARTING =====")
+        logger.info("[OUTLET v2.6.5] ===== POST-VALIDATION STARTING =====")
         
         # CRITICAL: Skip outlet for streaming responses to avoid freezing
         if isinstance(body, dict) and body.get("stream", False):
@@ -1292,59 +1294,8 @@ The AI model's response contradicted verified database information. Here is the 
                             1
                         )
                 
-                # BUILD USER-FRIENDLY VERIFICATION DISPLAY (v2.6.4)
-                verification_display = ""
-
-                # 1. TOP BANNER - Simple status indicator
-                if hallucinations_found:
-                    banner = f"\n\n{'━' * 80}\n"
-                    banner += f"⚠️  **CITATION VERIFICATION ALERT** ⚠️\n"
-                    banner += f"{'━' * 80}\n"
-                    banner += f"{verified_count} verified ✓ | {len(hallucinations_found)} unverified ⚠️\n"
-                    banner += f"Please review flagged citations carefully.\n"
-                    banner += f"{'━' * 80}\n\n"
-                    verification_display = banner + validated_response
-                else:
-                    banner = f"\n\n{'━' * 80}\n"
-                    banner += f"✅ **ALL CITATIONS VERIFIED** ✅\n"
-                    banner += f"{'━' * 80}\n"
-                    banner += f"All {verified_count} citation(s) confirmed as accurate\n"
-                    banner += f"{'━' * 80}\n\n"
-                    verification_display = banner + validated_response
-
-                # 2. SUMMARY TABLE - User-friendly breakdown
-                summary_table = f"\n\n{'━' * 80}\n"
-                summary_table += f"📋 **CITATION VERIFICATION SUMMARY**\n"
-                summary_table += f"{'━' * 80}\n\n"
-
-                if verified_citations:
-                    summary_table += f"### ✓ Verified Citations ({len(verified_citations)})\n\n"
-                    summary_table += f"| Citation | California Code | Status |\n"
-                    summary_table += f"|----------|-----------------|--------|\n"
-                    for vc in verified_citations:
-                        code_name = vc['code_name']
-                        summary_table += f"| **{vc['citation']}** | {code_name} Code | ✅ Verified |\n"
-                    summary_table += f"\n"
-
-                if hallucinations_found:
-                    summary_table += f"### ⚠️ Unverified Citations ({len(hallucinations_found)})\n\n"
-                    summary_table += f"| Citation | Status | Possible Issue |\n"
-                    summary_table += f"|----------|--------|----------------|\n"
-                    for hc in hallucinations_found:
-                        summary_table += f"| **~~{hc['citation']}~~** | ❌ Not Found | May be incorrect or obsolete |\n"
-                    summary_table += f"\n**⚠️ WARNING:** These citations could not be verified. They may be:\n"
-                    summary_table += f"- Incorrect section numbers\n"
-                    summary_table += f"- Misattributed to the wrong code\n"
-                    summary_table += f"- Repealed or outdated sections\n\n"
-
-                # 3. SIMPLE LEGEND
-                summary_table += f"{'─' * 80}\n"
-                summary_table += f"**Legend:**\n"
-                summary_table += f"- **Bold ✓** = Verified as accurate\n"
-                summary_table += f"- **~~Strikethrough~~ ⚠️** = Could not verify (use caution)\n"
-                summary_table += f"{'━' * 80}\n"
-
-                verification_display += summary_table
+                # FAST MODE - Just inline badges, no banner/summary (v2.6.5)
+                verification_display = validated_response
 
                 logger.info(f"[OUTLET] Verified: {verified_count}, Hallucinations: {len(hallucinations_found)}")
 
