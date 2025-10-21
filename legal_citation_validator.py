@@ -1,10 +1,15 @@
 """
 title: California Legal Code Citation Validator
 author: Legal AI Team
-version: 2.6.1
+version: 2.6.2
 description: Production-ready filter for hallucination-free legal citations with input sanitization
 required_open_webui_version: 0.3.0
 requirements: pymongo>=4.0.0
+
+🔍 IMPROVEMENT (v2.6.2):
+- Added version logging on startup, inlet, and outlet
+- Shows exactly which version is running in logs
+- Makes debugging and verification much easier
 
 🐛 BUGFIX (v2.6.1):
 - Fixed contradiction detection - metadata doesn't survive LLM processing
@@ -358,6 +363,11 @@ class Filter:
     
     async def on_startup(self):
         """Initialize MongoDB connection (non-blocking)"""
+        # LOG VERSION IMMEDIATELY ON STARTUP
+        logger.info("=" * 80)
+        logger.info("🔧 California Legal Citation Validator v2.6.2 - STARTING UP")
+        logger.info("=" * 80)
+
         try:
             # Initialize MongoDB client (connection pool, doesn't actually connect yet)
             self.mongo_client = MongoClient(
@@ -368,12 +378,13 @@ class Filter:
             self.db = self.mongo_client[self.valves.database_name]
             self.collection = self.db[self.valves.collection_name]
             self.architecture_collection = self.db[self.valves.architecture_collection]
-            
+
             # Log initialization (no actual connection test to avoid blocking)
             logger.info(f"✓ MongoDB client initialized for {self.valves.database_name}")
             logger.info(f"✓ Will connect to: {self.valves.mongodb_uri.split('@')[1] if '@' in self.valves.mongodb_uri else 'MongoDB'}")
             logger.info(f"✓ Available codes: PEN, CIV, CCP, FAM, GOV, CORP, PROB, EVID")
             logger.info(f"✓ Connection will be tested on first query")
+            logger.info("=" * 80)
             
             self.circuit_breaker.record_success()
             
@@ -835,16 +846,17 @@ Location: {hierarchy_str}
         return "\n".join(context_parts)
     
     async def inlet(
-        self, 
+        self,
         body: dict,
         __event_emitter__: Callable[[Any], Awaitable[None]] = None,
         __user__: Optional[dict] = None,
         __model__: Optional[dict] = None,
     ) -> dict:
         """Pre-process user queries to detect direct citation requests"""
+        logger.info("[INLET v2.6.2] Processing query...")
         self.metrics["total_queries"] += 1
         self._update_cache_config()
-        
+
         try:
             messages = body.get("messages", [])
             if not messages or not self.valves.enable_direct_lookup:
@@ -1021,7 +1033,7 @@ Now provide your answer using ONLY the verified content above:"""
             return body
     
     async def outlet(
-        self, 
+        self,
         body: dict,
         __event_emitter__: Callable[[Any], Awaitable[None]] = None,
         __user__: Optional[dict] = None,
@@ -1029,15 +1041,15 @@ Now provide your answer using ONLY the verified content above:"""
     ) -> dict:
         """
         Post-process LLM responses to validate citations
-        
+
         WARNING: Disabled by default as it can cause response freezing
         """
         # CRITICAL: Return immediately if disabled
         if not self.valves.enable_post_validation:
-            logger.info("[OUTLET] Post-validation DISABLED - skipping outlet processing")
+            logger.info("[OUTLET v2.6.2] Post-validation DISABLED - skipping outlet processing")
             return body
-        
-        logger.info("[OUTLET] ===== POST-VALIDATION STARTING =====")
+
+        logger.info("[OUTLET v2.6.2] ===== POST-VALIDATION STARTING =====")
         
         # CRITICAL: Skip outlet for streaming responses to avoid freezing
         if isinstance(body, dict) and body.get("stream", False):
