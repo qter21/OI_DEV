@@ -185,6 +185,13 @@ class Filter:
         
         return age < self.valves.cache_ttl_seconds
     
+    def clear_cache(self):
+        """Clear all cached sections - useful for debugging cache issues"""
+        self.section_cache.clear()
+        self.cache_timestamps.clear()
+        if self.valves.debug_mode:
+            print("[CACHE CLEARED] All cached sections removed")
+    
     async def fetch_exact_sections(
         self,
         citations: List[Dict[str, str]]
@@ -211,11 +218,20 @@ class Filter:
                 cache_key = f"{citation['code']}-{citation['section']}"
                 if self.is_cache_valid(cache_key):
                     cached = self.section_cache[cache_key].copy()
-                    cached["citation"] = citation["full_citation"]
-                    sections.append(cached)
-                    if self.valves.debug_mode:
-                        print(f"  [CACHE HIT] {cache_key}")
-                    continue
+                    
+                    # CRITICAL FIX: Validate cached content matches requested code
+                    if cached.get("code") != citation["code"]:
+                        if self.valves.debug_mode:
+                            print(f"  [CACHE INVALID] {cache_key} - code mismatch: cached={cached.get('code')}, requested={citation['code']}")
+                        # Remove invalid cache entry
+                        del self.section_cache[cache_key]
+                        del self.cache_timestamps[cache_key]
+                    else:
+                        cached["citation"] = citation["full_citation"]
+                        sections.append(cached)
+                        if self.valves.debug_mode:
+                            print(f"  [CACHE HIT] {cache_key}")
+                        continue
 
                 # Query MongoDB using actual schema
                 query = {
@@ -244,9 +260,16 @@ class Filter:
                         "updated_at": document.get("updated_at")
                     }
                     
-                    # Cache the result
-                    self.section_cache[cache_key] = section_data.copy()
-                    self.cache_timestamps[cache_key] = datetime.now()
+                    # Cache the result with validation
+                    # CRITICAL FIX: Ensure cached content matches the requested code
+                    if document.get("code") == citation["code"]:
+                        self.section_cache[cache_key] = section_data.copy()
+                        self.cache_timestamps[cache_key] = datetime.now()
+                        if self.valves.debug_mode:
+                            print(f"  [CACHE STORE] {cache_key} - Validated and stored")
+                    else:
+                        if self.valves.debug_mode:
+                            print(f"  [CACHE SKIP] {cache_key} - Code mismatch: db={document.get('code')}, requested={citation['code']}")
                     
                     sections.append(section_data)
                     

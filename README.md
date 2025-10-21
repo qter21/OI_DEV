@@ -35,7 +35,14 @@ This repository contains the **California Legal Code Citation Validator** - an O
    - **Time to read:** 45-60 minutes
    - **Use for:** Implementation reference, deployment guide
 
-4. **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** ⚡ **(Quick Reference)**
+4. **[CACHE_VALIDATION_BUG_FIX.md](CACHE_VALIDATION_BUG_FIX.md)** 🐛 **(Critical Fix)**
+   - Cache validation bug resolution
+   - Data integrity fix
+   - Testing and verification
+   - **Time to read:** 10 minutes
+   - **Use for:** Understanding recent critical fix
+
+5. **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** ⚡ **(Quick Reference)**
    - What was updated
    - Database verification results
    - Configuration details
@@ -60,6 +67,7 @@ This repository contains the **California Legal Code Citation Validator** - an O
 | **FINAL_SUMMARY.md** | Executive overview & status | Everyone | ⭐⭐⭐⭐⭐ |
 | **ARCHITECTURE_CLARIFIED.md** | Visual architecture guide | Technical & non-technical | ⭐⭐⭐⭐⭐ |
 | **ARCHITECTURE_DESIGN.md** | Complete technical spec | Developers, DevOps | ⭐⭐⭐⭐⭐ |
+| **CACHE_VALIDATION_BUG_FIX.md** | Critical bug fix documentation | Developers, DevOps | ⭐⭐⭐⭐⭐ |
 | **IMPLEMENTATION_SUMMARY.md** | Quick reference card | Developers | ⭐⭐⭐⭐ |
 | **RESPONSE_TO_REVIEW.md** | Stakeholder communication | Management, reviewers | ⭐⭐⭐⭐⭐ |
 
@@ -377,8 +385,9 @@ For questions about:
 
 ---
 
-*Last Updated: October 20, 2025*
-*Filter Version: 1.0.0*
+*Last Updated: December 19, 2024*
+*Filter Version: 2.0.0*
 *Status: Production - Deployed*
 *Documentation Suite: Complete*
+*Critical Bug Fix: Applied*
 
