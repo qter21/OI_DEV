@@ -955,32 +955,30 @@ Location: {hierarchy_str}
                     # NEW APPROACH: Format as if assistant is continuing from verified facts
                     context = self.format_section_context(exact_sections)
                     
-                    # Build verified statement
-                    verified_codes = [f"{s['code']} {s['section']}" for s in exact_sections]
+                    # Build verified statement with user-friendly formatting
+                    verified_codes = [f"**{s['code']} {s['section']} ✓**" for s in exact_sections]
                     code_name = exact_sections[0].get('code_name', exact_sections[0]['code'])
-                    
-                    # Create a format that forces the LLM to continue from the verified fact
-                    enriched_message = f"""Based on the official California Legal Codes Database query:
 
-DATABASE SEARCH PERFORMED:
-Query: code='{exact_sections[0]['code']}' AND section='{exact_sections[0]['section']}'
-Status: FOUND ✓
-Result: This section exists in the California {code_name} Code
+                    # Create a user-friendly enriched message with verified badges
+                    enriched_message = f"""The following California legal code section has been verified as accurate:
 
-VERIFIED DATABASE CONTENT:
+VERIFIED SECTION:
+{verified_codes[0]} - California {code_name} Code
+
+OFFICIAL CONTENT:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {context}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 USER'S QUESTION: {self.sanitize_user_input(user_message)}
 
-YOU ARE NOW ANSWERING BASED ON THE VERIFIED DATABASE CONTENT ABOVE.
+INSTRUCTIONS:
+Answer the user's question based on the verified content above. Your response must:
+1. Begin with: "**California {code_name} Code Section {exact_sections[0]['section']} ✓**"
+2. Use ONLY the verified content provided
+3. Do NOT mention other codes or sections not shown above
 
-Your response must begin with: "California {code_name} Code Section {exact_sections[0]['section']}"
-
-Do NOT mention any other code. Do NOT say this section belongs to a different code. The database has definitively confirmed this is {code_name} Code, section {exact_sections[0]['section']}.
-
-Now provide your answer using ONLY the verified content above:"""
+Provide your answer:"""
                     
                     messages[-1]["content"] = enriched_message
 
@@ -1294,59 +1292,56 @@ The AI model's response contradicted verified database information. Here is the 
                             1
                         )
                 
-                # BUILD COMPREHENSIVE VERIFICATION DISPLAY (v2.6.4)
+                # BUILD USER-FRIENDLY VERIFICATION DISPLAY (v2.6.4)
                 verification_display = ""
 
-                # 1. TOP BANNER - Prominent status indicator
+                # 1. TOP BANNER - Simple status indicator
                 if hallucinations_found:
                     banner = f"\n\n{'━' * 80}\n"
-                    banner += f"⚠️  **CITATION VALIDATION ALERT** ⚠️\n"
+                    banner += f"⚠️  **CITATION VERIFICATION ALERT** ⚠️\n"
                     banner += f"{'━' * 80}\n"
-                    banner += f"**Status:** {verified_count} verified ✓ | {len(hallucinations_found)} UNVERIFIED ⚠️\n"
-                    banner += f"**Action Required:** Review flagged citations before relying on them\n"
+                    banner += f"{verified_count} verified ✓ | {len(hallucinations_found)} unverified ⚠️\n"
+                    banner += f"Please review flagged citations carefully.\n"
                     banner += f"{'━' * 80}\n\n"
                     verification_display = banner + validated_response
                 else:
                     banner = f"\n\n{'━' * 80}\n"
                     banner += f"✅ **ALL CITATIONS VERIFIED** ✅\n"
                     banner += f"{'━' * 80}\n"
-                    banner += f"**Status:** All {verified_count} citation(s) confirmed in California Codes Database\n"
-                    banner += f"**Confidence:** 100% - All legal code references verified\n"
+                    banner += f"All {verified_count} citation(s) confirmed as accurate\n"
                     banner += f"{'━' * 80}\n\n"
                     verification_display = banner + validated_response
 
-                # 2. SUMMARY TABLE - Professional citation breakdown
+                # 2. SUMMARY TABLE - User-friendly breakdown
                 summary_table = f"\n\n{'━' * 80}\n"
                 summary_table += f"📋 **CITATION VERIFICATION SUMMARY**\n"
                 summary_table += f"{'━' * 80}\n\n"
 
                 if verified_citations:
                     summary_table += f"### ✓ Verified Citations ({len(verified_citations)})\n\n"
-                    summary_table += f"| Citation | Code | Status | Database |\n"
-                    summary_table += f"|----------|------|--------|----------|\n"
+                    summary_table += f"| Citation | California Code | Status |\n"
+                    summary_table += f"|----------|-----------------|--------|\n"
                     for vc in verified_citations:
                         code_name = vc['code_name']
-                        summary_table += f"| **{vc['citation']}** | California {code_name} Code | ✅ VERIFIED | MongoDB |\n"
+                        summary_table += f"| **{vc['citation']}** | {code_name} Code | ✅ Verified |\n"
                     summary_table += f"\n"
 
                 if hallucinations_found:
                     summary_table += f"### ⚠️ Unverified Citations ({len(hallucinations_found)})\n\n"
-                    summary_table += f"| Citation | Attempted Code | Status | Issue |\n"
-                    summary_table += f"|----------|----------------|--------|-------|\n"
+                    summary_table += f"| Citation | Status | Possible Issue |\n"
+                    summary_table += f"|----------|--------|----------------|\n"
                     for hc in hallucinations_found:
-                        summary_table += f"| **~~{hc['citation']}~~** | {hc['code']} {hc['section']} | ❌ NOT FOUND | Does not exist in database |\n"
+                        summary_table += f"| **~~{hc['citation']}~~** | ❌ Not Found | May be incorrect or obsolete |\n"
                     summary_table += f"\n**⚠️ WARNING:** These citations could not be verified. They may be:\n"
                     summary_table += f"- Incorrect section numbers\n"
                     summary_table += f"- Misattributed to the wrong code\n"
-                    summary_table += f"- Repealed or obsolete sections\n"
-                    summary_table += f"- AI hallucinations\n\n"
+                    summary_table += f"- Repealed or outdated sections\n\n"
 
-                # 3. LEGEND - Explain the symbols
+                # 3. SIMPLE LEGEND
                 summary_table += f"{'─' * 80}\n"
                 summary_table += f"**Legend:**\n"
-                summary_table += f"- **Bold ✓** = Verified in California Codes Database (reliable)\n"
-                summary_table += f"- **~~Strikethrough~~ ⚠️** = Unverified (use caution)\n"
-                summary_table += f"- Database: MongoDB @ 10.168.0.6 (ca_codes_db.section_contents)\n"
+                summary_table += f"- **Bold ✓** = Verified as accurate\n"
+                summary_table += f"- **~~Strikethrough~~ ⚠️** = Could not verify (use caution)\n"
                 summary_table += f"{'━' * 80}\n"
 
                 verification_display += summary_table
