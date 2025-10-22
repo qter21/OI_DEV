@@ -1,22 +1,46 @@
 # California Legal Citation Validator - OpenWebUI Filter
 
+## 🎉 v2.7.5 - First Stable Production Release
+
+[![Version](https://img.shields.io/badge/version-2.7.5-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-production--ready-green.svg)](DEPLOYMENT_GUIDE_V2.7.5.md)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 ## 📚 Overview
 
-This repository contains the **California Legal Code Citation Validator** - an OpenWebUI filter that prevents hallucination in legal code citations by providing exact MongoDB lookups for California legal codes.
+This repository contains the **California Legal Code Citation Validator** - an OpenWebUI filter that prevents hallucination in legal code citations by providing exact API lookups for California legal codes.
+
+**Latest Release**: v2.7.5 (October 21, 2025) - First production-ready stable version with API migration, security hardening, and comprehensive testing complete.
 
 ---
 
 ## 📖 Reading Guide
 
-### For New Users: Start Here
+### 🚀 Quick Start (v2.7.5)
 
-1. **[FINAL_SUMMARY.md](FINAL_SUMMARY.md)** ⭐ **(Start Here)**
+1. **[DEPLOYMENT_GUIDE_V2.7.5.md](DEPLOYMENT_GUIDE_V2.7.5.md)** 🎯 **(Deploy Now!)**
+   - Step-by-step deployment instructions
+   - Three deployment methods (Admin Panel, Docker, Hot-Patch)
+   - Configuration guide
+   - Troubleshooting
+   - **Time to read:** 20 minutes
+   - **Use for:** Getting v2.7.5 into production
+
+2. **[CHANGELOG.md](CHANGELOG.md)** 📋 **(What's New)**
+   - Complete version history
+   - v2.7.5 release notes
+   - Migration guide from v2.6.x
+   - **Time to read:** 10 minutes
+
+### For New Users: Understanding the System
+
+3. **[FINAL_SUMMARY.md](FINAL_SUMMARY.md)** ⭐ **(Start Here)**
    - Executive overview
    - Quick understanding of the system
    - Deployment readiness status
    - **Time to read:** 10 minutes
 
-2. **[ARCHITECTURE_CLARIFIED.md](ARCHITECTURE_CLARIFIED.md)** 🎯 **(Best Document)**
+4. **[ARCHITECTURE_CLARIFIED.md](ARCHITECTURE_CLARIFIED.md)** 🎯 **(Best Document)**
    - Visual architecture explanation
    - How pipeline works with Open WebUI's RAG
    - Real-world flow examples
@@ -24,10 +48,10 @@ This repository contains the **California Legal Code Citation Validator** - an O
 
 ### For Implementers: Technical Documentation
 
-3. **[ARCHITECTURE_DESIGN.md](ARCHITECTURE_DESIGN.md)** 🔧 **(Complete Spec)**
+5. **[ARCHITECTURE_DESIGN.md](ARCHITECTURE_DESIGN.md)** 🔧 **(Complete Spec)**
    - Full technical architecture (1,550+ lines)
    - Production-ready pipeline code
-   - MongoDB schema
+   - ~~MongoDB schema~~ API integration (v2.7.0+)
    - Deployment checklist
    - Performance expectations
    - Monitoring guide
@@ -35,14 +59,14 @@ This repository contains the **California Legal Code Citation Validator** - an O
    - **Time to read:** 45-60 minutes
    - **Use for:** Implementation reference, deployment guide
 
-4. **[CACHE_VALIDATION_BUG_FIX.md](CACHE_VALIDATION_BUG_FIX.md)** 🐛 **(Critical Fix)**
+6. **[CACHE_VALIDATION_BUG_FIX.md](CACHE_VALIDATION_BUG_FIX.md)** 🐛 **(Critical Fix)**
    - Cache validation bug resolution
    - Data integrity fix
    - Testing and verification
    - **Time to read:** 10 minutes
    - **Use for:** Understanding recent critical fix
 
-5. **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** ⚡ **(Quick Reference)**
+7. **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** ⚡ **(Quick Reference)**
    - What was updated
    - Database verification results
    - Configuration details
@@ -51,7 +75,7 @@ This repository contains the **California Legal Code Citation Validator** - an O
 
 ### For Stakeholders: Communication
 
-5. **[RESPONSE_TO_REVIEW.md](RESPONSE_TO_REVIEW.md)** 📊 **(Rebuttal)**
+8. **[RESPONSE_TO_REVIEW.md](RESPONSE_TO_REVIEW.md)** 📊 **(Rebuttal)**
    - Response to external reviewer
    - Corrects misunderstandings about architecture
    - Evidence-based assessment

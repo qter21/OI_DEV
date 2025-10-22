@@ -1,17 +1,74 @@
 """
 title: California Legal Code Citation Validator
 author: Legal AI Team
-version: 2.6.7
-description: Production-ready filter for hallucination-free legal citations with input sanitization
+version: 2.7.5
+description: Production-ready filter for hallucination-free legal citations using CodeCond API
 required_open_webui_version: 0.3.0
-requirements: pymongo>=4.0.0
+requirements: httpx>=0.24.0
 
-⚡ PERFORMANCE (v2.6.7):
-- ULTRA-FAST MODE - Simplified inlet prompt for faster LLM responses
-- Removed verbose instructions that slowed down generation
-- Reduced prompt from 13 lines to 3 lines - much faster processing
-- Added "be concise" directive to keep responses brief
-- User feedback: "super slow to have a response" - FIXED
+🔧 CRITICAL FIX (v2.7.5):
+- Increased priority from 10 → 100 (maximum) to run before Prompt Enhancer filter
+- **Issue:** Prompt Enhancer was wrapping "EVID 761" before inlet could extract it
+- Now runs FIRST before all other filters modify the user query
+- Keeps debug logging from v2.7.4 to verify fix works
+
+🐛 DEBUG RELEASE (v2.7.4):
+- Added detailed debug logging to diagnose regex extraction failures
+- Logs exact user message content, length, and type received by inlet
+- Will help identify if message is being modified before inlet processing
+- **Investigation:** Inlet runs but extracts no citations from "EVID 761"
+
+🔧 CRITICAL FIX (v2.7.3):
+- Added `priority` valve (default: 10) to control filter execution order
+- Ensures inlet runs BEFORE RAG retrieval for models with RAG enabled
+- Fixes issue where inlet was skipped when using RAG-enabled models
+- Priority 10 guarantees exact API lookups inject content before semantic RAG search
+- **Root cause:** OpenWebUI was executing RAG → LLM → outlet, skipping inlet entirely
+
+✨ MULTI-VERSION SUPPORT (v2.7.1):
+- Added support for multi-version sections (e.g., CCP 35 with 2 versions)
+- Automatically detects and combines all versions with clear version headers
+- Shows operative dates and status for each version
+- Combines legislative history from all versions
+
+🐛 BUGFIX (v2.7.1):
+- Fixed citation extraction validation to skip citations without section numbers
+- Improved logging to debug verification summary issues
+- Better handling of API 404 responses
+
+🔄 API MIGRATION (v2.7.0):
+- Migrated from direct MongoDB access to production API (codecond.com)
+- Improved architecture: uses read-only REST API endpoints
+- Better security: no direct database credentials needed
+- Same functionality: all caching, validation, verification preserved
+- API endpoint: GET https://www.codecond.com/api/v2/codes/{code}/sections/{section}
+
+🎨 UI POLISH (v2.6.12):
+- Refined verification summary wording for cleaner display
+- "VERIFIED in Database" → "Verified" (more concise)
+- Removed redundant validation status line
+- Smaller font for section heading (### instead of ##)
+- User feedback: "some wording could be better" - DONE
+
+✨ ENHANCEMENT (v2.6.11):
+- Added verification summary section at end of response
+- Explicitly lists all verified sections with database confirmation
+- Shows verification status table for double confirmation
+
+🐛 BUGFIX (v2.6.10):
+- Fixed outlet badge not showing - logic was blocking bold formatting when checkmark exists
+- Now properly bolds citations that already have checkmarks from inlet
+- Verification badges now show correctly: **California Evidence Code Section 761 ✓**
+
+🐛 BUGFIX (v2.6.9):
+- Fixed double checkmark issue in outlet (was showing "✓ ✓" instead of just "✓")
+- Added compound query support: "section 762 or 763", "sections 760, 761, and 762"
+- Improved regex to extract multiple sections from natural language queries
+
+⚡ PERFORMANCE (v2.6.8):
+- BALANCED MODE - Complete legal content with reasonable speed
+- Shows full section text + legislative history when available
+- Prompt optimized for completeness without verbose instructions
 
 🐛 BUGFIX (v2.6.7):
 - Fixed LLM ignoring verified database content and giving "consult the code" recommendations
@@ -68,17 +125,16 @@ For security details, see SECURITY.md
 from typing import List, Dict, Optional, Callable, Awaitable, Any, TypedDict
 from pydantic import BaseModel, Field
 import re
-from pymongo import MongoClient
+import httpx
 from datetime import datetime, timedelta
 from collections import OrderedDict
 import logging
 import hashlib
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 # Type definitions
 class SectionData(TypedDict, total=False):
-    """Type definition for legal code section data (v2.6.0+)"""
+    """Type definition for legal code section data (v2.7.1+)"""
     code: str
     code_name: str
     section: str
@@ -91,6 +147,8 @@ class SectionData(TypedDict, total=False):
     article: Optional[str]
     citation: str
     updated_at: Optional[str]
+    is_multi_version: bool  # New in v2.7.1
+    total_versions: Optional[int]  # New in v2.7.1
 
 # Setup logger
 def setup_logger():
@@ -231,21 +289,21 @@ class CircuitBreaker:
 class Filter:
     class Valves(BaseModel):
         """Configuration for the legal citation pipeline"""
-        mongodb_uri: str = Field(
-            default="mongodb://admin:legalcodes123@localhost:27017",
-            description="MongoDB connection string with authentication"
+        priority: int = Field(
+            default=100,
+            description="Filter execution priority (higher = runs first). Set to 100 (maximum) to run before ALL other filters including Prompt Enhancer.",
+            ge=0,
+            le=100,
         )
-        database_name: str = Field(
-            default="ca_codes_db",
-            description="Database containing California legal codes"
+        api_base_url: str = Field(
+            default="https://www.codecond.com/api/v2",
+            description="Base URL for CodeCond API"
         )
-        collection_name: str = Field(
-            default="section_contents",
-            description="Collection with code section content"
-        )
-        architecture_collection: str = Field(
-            default="code_architectures",
-            description="Collection with code tree structure"
+        api_timeout_seconds: int = Field(
+            default=5,
+            description="Timeout for API requests in seconds",
+            ge=1,
+            le=30,
         )
         enable_direct_lookup: bool = Field(
             default=True,
@@ -282,12 +340,6 @@ class Filter:
             description="Skip validation for messages shorter than this (characters). Saves time on greetings like 'hi', 'thanks'",
             ge=0,
             le=100,
-        )
-        mongodb_timeout_seconds: int = Field(
-            default=5,
-            description="Timeout for MongoDB queries in seconds. Prevents hanging requests",
-            ge=1,
-            le=30,
         )
         enable_context_preload: bool = Field(
             default=True,
@@ -337,6 +389,12 @@ class Filter:
                 re.IGNORECASE
             )
         ]
+
+        # Compound query pattern for "section 762 or 763" or "sections 760, 761, and 762"
+        self.compound_section_pattern = re.compile(
+            r'(?:California\s+)?([A-Za-z\s]+)\s+Code\s+[Ss]ections?\s+((?:\d+(?:\.\d+)?(?:\s*(?:,|or|and)\s*)?)+)',
+            re.IGNORECASE
+        )
         
         # Map full names and abbreviations to database codes
         self.code_mapping = {
@@ -364,16 +422,10 @@ class Filter:
         # Request-level cache for passing data from inlet to outlet
         # Key: hash of messages, Value: verified sections
         self.request_verified_sections = {}
-        
-        # MongoDB connection
-        self.mongo_client = None
-        self.db = None
-        self.collection = None
-        self.architecture_collection = None
-        
-        # Thread pool for non-blocking MongoDB operations
-        self.executor = ThreadPoolExecutor(max_workers=4)
-        
+
+        # HTTP client for API calls
+        self.http_client = None
+
         # Performance features
         self.section_cache = TTLCache(maxsize=1000, ttl_seconds=3600)
         self.circuit_breaker = CircuitBreaker(failure_threshold=5, timeout_seconds=60)
@@ -386,50 +438,45 @@ class Filter:
             "hallucinations_found": 0,
             "cache_hits": 0,
             "cache_misses": 0,
-            "mongodb_errors": 0,
+            "api_errors": 0,
             "circuit_breaker_blocks": 0,
         }
     
     async def on_startup(self):
-        """Initialize MongoDB connection (non-blocking)"""
+        """Initialize HTTP client for API calls"""
         # LOG VERSION IMMEDIATELY ON STARTUP
         logger.info("=" * 80)
-        logger.info("🔧 California Legal Citation Validator v2.6.7 - STARTING UP")
+        logger.info("🔧 California Legal Citation Validator v2.7.5 - STARTING UP")
         logger.info("=" * 80)
 
         try:
-            # Initialize MongoDB client (connection pool, doesn't actually connect yet)
-            self.mongo_client = MongoClient(
-                self.valves.mongodb_uri,
-                serverSelectionTimeoutMS=5000,
-                connect=False  # Don't connect immediately, connect on first query
+            # Initialize HTTP client with connection pooling
+            self.http_client = httpx.AsyncClient(
+                base_url=self.valves.api_base_url,
+                timeout=httpx.Timeout(self.valves.api_timeout_seconds),
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                follow_redirects=True
             )
-            self.db = self.mongo_client[self.valves.database_name]
-            self.collection = self.db[self.valves.collection_name]
-            self.architecture_collection = self.db[self.valves.architecture_collection]
 
-            # Log initialization (no actual connection test to avoid blocking)
-            logger.info(f"✓ MongoDB client initialized for {self.valves.database_name}")
-            logger.info(f"✓ Will connect to: {self.valves.mongodb_uri.split('@')[1] if '@' in self.valves.mongodb_uri else 'MongoDB'}")
+            # Log initialization
+            logger.info(f"✓ HTTP client initialized for {self.valves.api_base_url}")
+            logger.info(f"✓ API timeout: {self.valves.api_timeout_seconds}s")
             logger.info(f"✓ Available codes: PEN, CIV, CCP, FAM, GOV, CORP, PROB, EVID")
-            logger.info(f"✓ Connection will be tested on first query")
+            logger.info(f"✓ API endpoint: GET /codes/{{code}}/sections/{{section}}")
             logger.info("=" * 80)
-            
+
             self.circuit_breaker.record_success()
-            
+
         except Exception as e:
-            logger.error(f"✗ MongoDB initialization failed: {e}")
-            logger.error(f"  URI: {self.valves.mongodb_uri.replace('legalcodes123', '***')}")
+            logger.error(f"✗ HTTP client initialization failed: {e}")
+            logger.error(f"  Base URL: {self.valves.api_base_url}")
             self.circuit_breaker.record_failure()
-    
+
     async def on_shutdown(self):
-        """Cleanup MongoDB connection and thread pool"""
-        if self.mongo_client:
-            self.mongo_client.close()
-            logger.info("✓ MongoDB connection closed")
-        if self.executor:
-            self.executor.shutdown(wait=True)
-            logger.info("✓ Thread pool executor shutdown")
+        """Cleanup HTTP client"""
+        if self.http_client:
+            await self.http_client.aclose()
+            logger.info("✓ HTTP client closed")
     
     def _update_cache_config(self):
         """Update cache configuration from valves"""
@@ -438,30 +485,66 @@ class Filter:
     def extract_citations(self, text: str) -> List[Dict[str, str]]:
         """
         Extract legal code citations from text using multiple patterns
-        
+
         Returns:
             List of dicts with 'code', 'section', and 'full_citation'
         """
         citations = []
         seen_citations = set()  # Avoid duplicates
-        
+
+        # FIRST: Try compound section pattern (e.g., "Evidence Code section 762 or 763")
+        compound_matches = self.compound_section_pattern.finditer(text)
+        for match in compound_matches:
+            code_raw = match.group(1).strip().lower()
+            sections_str = match.group(2)
+
+            # Map to database code format
+            code = self.code_mapping.get(code_raw, code_raw.upper())
+
+            # Ensure code is valid
+            if code not in self.code_names:
+                continue
+
+            # Extract all section numbers from the compound string
+            section_numbers = re.findall(r'(\d+(?:\.\d+)?)', sections_str)
+
+            for section in section_numbers:
+                # Validate section number exists
+                if not section or not section.strip():
+                    continue
+
+                citation_key = f"{code}-{section}"
+                if citation_key not in seen_citations:
+                    seen_citations.add(citation_key)
+                    citations.append({
+                        "code": code,
+                        "section": section,
+                        "full_citation": f"{code} {section}"
+                    })
+
+        # SECOND: Try standard patterns
         for pattern in self.citation_patterns:
             matches = pattern.finditer(text)
-            
+
             for match in matches:
                 code_raw = match.group(1).strip().lower()
                 section = match.group(2)
-                
+
+                # Validate section number exists
+                if not section or not section.strip():
+                    logger.warning(f"[CITATION EXTRACT] Skipping citation without section number: {match.group(0)}")
+                    continue
+
                 # Map to database code format
                 code = self.code_mapping.get(code_raw, code_raw.upper())
-                
+
                 # Ensure code is valid
                 if code not in self.code_names:
                     continue
-                
+
                 # Create unique key to avoid duplicates
                 citation_key = f"{code}-{section}"
-                
+
                 if citation_key not in seen_citations:
                     seen_citations.add(citation_key)
                     citations.append({
@@ -469,7 +552,8 @@ class Filter:
                         "section": section,
                         "full_citation": match.group(0)
                     })
-        
+
+        logger.debug(f"[CITATION EXTRACT] Extracted {len(citations)} valid citations from text")
         return citations
     
     async def _extract_with_llm(
@@ -702,52 +786,52 @@ Return ONLY valid JSON in this exact format:
         __event_emitter__: Optional[Callable[[Any], Awaitable[None]]] = None
     ) -> List[SectionData]:
         """
-        Retrieve exact code sections from MongoDB with timeout (QUICK WIN #2)
-        
+        Retrieve exact code sections from API with timeout
+
         Args:
             citations: List of parsed citations with 'code' and 'section' keys
             __event_emitter__: Optional event emitter for status updates
-            
+
         Returns:
-            List of matching documents from MongoDB with actual schema fields
+            List of matching section data from API
         """
         import asyncio
-        
+
         # Check circuit breaker
         if not self.circuit_breaker.can_proceed():
             self.metrics["circuit_breaker_blocks"] += 1
-            logger.warning("Circuit breaker OPEN - skipping MongoDB lookup")
+            logger.warning("Circuit breaker OPEN - skipping API lookup")
             if __event_emitter__:
                 await __event_emitter__({
                     "type": "status",
                     "data": {
-                        "description": "⚠️ MongoDB temporarily unavailable",
+                        "description": "⚠️ API temporarily unavailable",
                         "done": True
                     }
                 })
             return []
-        
-        # Ensure MongoDB connection exists
-        if self.collection is None:
-            logger.warning("MongoDB not connected, initializing...")
+
+        # Ensure HTTP client exists
+        if self.http_client is None:
+            logger.warning("HTTP client not initialized, initializing...")
             await self.on_startup()
-        
-        # Wrap MongoDB operations with timeout (QUICK WIN #2)
+
+        # Wrap API operations with timeout
         try:
             sections = await asyncio.wait_for(
                 self._fetch_sections_internal(citations, __event_emitter__),
-                timeout=self.valves.mongodb_timeout_seconds
+                timeout=self.valves.api_timeout_seconds
             )
             return sections
         except asyncio.TimeoutError:
-            logger.error(f"MongoDB query timeout after {self.valves.mongodb_timeout_seconds}s")
-            self.metrics["mongodb_errors"] += 1
+            logger.error(f"API request timeout after {self.valves.api_timeout_seconds}s")
+            self.metrics["api_errors"] += 1
             self.circuit_breaker.record_failure()
             if __event_emitter__:
                 await __event_emitter__({
                     "type": "status",
                     "data": {
-                        "description": "⚠️ MongoDB timeout - using cached data only",
+                        "description": "⚠️ API timeout - using cached data only",
                         "done": True
                     }
                 })
@@ -758,15 +842,13 @@ Return ONLY valid JSON in this exact format:
         citations: List[Dict[str, str]],
         __event_emitter__: Optional[Callable[[Any], Awaitable[None]]] = None
     ) -> List[Dict]:
-        """Internal method for fetching sections (separated for timeout handling)"""
-        import asyncio
-        
+        """Internal method for fetching sections from API (separated for timeout handling)"""
         sections = []
-        
+
         for citation in citations:
             try:
                 cache_key = self.generate_cache_key(citation["code"], citation["section"])
-                
+
                 # Check cache first
                 cached = self.section_cache.get(cache_key)
                 if cached:
@@ -779,101 +861,245 @@ Return ONLY valid JSON in this exact format:
                         continue
                     else:
                         logger.debug(f"[CACHE INVALID] {cache_key} - code mismatch")
-                
+
                 self.metrics["cache_misses"] += 1
-                
-                # Query MongoDB using actual schema
-                query = {
-                    "code": citation["code"],
-                    "section": citation["section"],
-                    "is_current": True  # Only get current version
-                }
-                
-                logger.info(f"[QUERY] Executing MongoDB query: {query}")
-                
-                # Run synchronous MongoDB call in thread pool to avoid blocking
-                loop = asyncio.get_event_loop()
-                document = await loop.run_in_executor(
-                    self.executor,
-                    lambda: self.collection.find_one(query)
-                )
-                
-                # DEBUG: Log what MongoDB actually returned
-                if document:
-                    logger.info(f"[MONGODB RESULT] Found document - code={document.get('code')}, section={document.get('section')}, content_length={len(document.get('content', ''))}")
-                    logger.info(f"[MONGODB RESULT] Content preview: {document.get('content', '')[:100]}...")
-                
-                if document:
-                    code = document.get("code")
-                    section_data = {
-                        "code": code,
-                        "code_name": self.code_names.get(code, code),  # Add full code name
-                        "section": document.get("section"),
-                        "content": document.get("content", ""),
-                        "legislative_history": document.get("legislative_history", "") if self.valves.enable_legislative_history else "",
-                        "url": document.get("url", ""),
-                        "division": document.get("division"),
-                        "part": document.get("part"),
-                        "chapter": document.get("chapter"),
-                        "article": document.get("article"),
-                        "citation": citation["full_citation"],
-                        "updated_at": document.get("updated_at")
-                    }
-                    
+
+                # Call API endpoint: GET /codes/{code}/sections/{section}
+                code = citation["code"]
+                section = citation["section"]
+                endpoint = f"/codes/{code}/sections/{section}"
+
+                logger.info(f"[API CALL] GET {endpoint}")
+
+                # Make HTTP request
+                response = await self.http_client.get(endpoint)
+
+                # Check response status
+                if response.status_code == 200:
+                    document = response.json()
+
+                    # Check if this is a multi-version section
+                    is_multi_version = document.get("is_multi_version", False)
+
+                    if is_multi_version:
+                        # Handle multi-version sections (e.g., CCP 35)
+                        logger.info(f"[API RESULT] Multi-version section found - code={document.get('code')}, section={document.get('section')}, versions={document.get('total_versions', 0)}")
+
+                        versions = document.get("versions", [])
+                        if not versions:
+                            logger.warning(f"[API] Multi-version section has no versions: {citation['full_citation']}")
+                            continue
+
+                        # Combine all versions into a single content block
+                        combined_content_parts = []
+                        combined_history_parts = []
+
+                        for idx, version in enumerate(versions, 1):
+                            version_content = version.get("content", "")
+                            version_history = version.get("legislative_history", "")
+                            operative_date = version.get("operative_date")
+                            status = version.get("status", "unknown")
+
+                            # Add version header
+                            if operative_date:
+                                header = f"**Version {idx} (Operative: {operative_date}, Status: {status}):**\n"
+                            else:
+                                header = f"**Version {idx} (Status: {status}):**\n"
+
+                            combined_content_parts.append(header + version_content)
+
+                            if version_history:
+                                combined_history_parts.append(f"Version {idx}: {version_history}")
+
+                        # Create section data with combined versions
+                        section_data = {
+                            "code": document.get("code"),
+                            "code_name": self.code_names.get(document.get("code"), document.get("code")),
+                            "section": document.get("section"),
+                            "content": "\n\n".join(combined_content_parts),
+                            "legislative_history": "\n\n".join(combined_history_parts) if self.valves.enable_legislative_history else "",
+                            "url": document.get("url", ""),
+                            "division": None,  # Multi-version sections don't have single hierarchy
+                            "part": None,
+                            "chapter": None,
+                            "article": None,
+                            "citation": citation["full_citation"],
+                            "updated_at": document.get("updated_at"),
+                            "is_multi_version": True,
+                            "total_versions": document.get("total_versions", len(versions))
+                        }
+
+                        logger.info(f"[API RESULT] Multi-version content combined - total_length={len(section_data['content'])}")
+
+                    else:
+                        # Handle single-version sections (normal case)
+                        logger.info(f"[API RESULT] Found section - code={document.get('code')}, section={document.get('section')}, content_length={len(document.get('content', ''))}")
+                        logger.info(f"[API RESULT] Content preview: {document.get('content', '')[:100]}...")
+
+                        # Transform API response to section data format
+                        section_data = {
+                            "code": document.get("code"),
+                            "code_name": self.code_names.get(document.get("code"), document.get("code")),
+                            "section": document.get("section"),
+                            "content": document.get("content", ""),
+                            "legislative_history": document.get("legislative_history", "") if self.valves.enable_legislative_history else "",
+                            "url": document.get("url", ""),
+                            "division": document.get("division"),
+                            "part": document.get("part"),
+                            "chapter": document.get("chapter"),
+                            "article": document.get("article"),
+                            "citation": citation["full_citation"],
+                            "updated_at": document.get("updated_at"),
+                            "is_multi_version": False
+                        }
+
                     # Cache the result with validation
                     if document.get("code") == citation["code"]:
                         self.section_cache.set(cache_key, section_data.copy())
                         logger.debug(f"[CACHE STORE] {cache_key}")
-                    
+
                     sections.append(section_data)
-                    logger.debug(f"[DB FETCH] {cache_key} - Found")
-                    
+                    logger.debug(f"[API FETCH] {cache_key} - Found")
+
                     # Record success
                     self.circuit_breaker.record_success()
+
+                elif response.status_code == 404:
+                    logger.info(f"[API 404] Section not found - {citation['full_citation']}")
+                    # Don't add to sections - this is a hallucination
                 else:
-                    logger.debug(f"⚠ Warning: Section not found - {citation['full_citation']}")
-                    
+                    logger.warning(f"[API ERROR] HTTP {response.status_code} for {citation['full_citation']}")
+                    self.metrics["api_errors"] += 1
+                    # Don't add to sections on error
+
+            except httpx.HTTPError as e:
+                logger.error(f"✗ HTTP error fetching section {citation['full_citation']}: {e}")
+                self.metrics["api_errors"] += 1
+                self.circuit_breaker.record_failure()
             except Exception as e:
                 logger.error(f"✗ Error fetching section {citation['full_citation']}: {e}")
-                self.metrics["mongodb_errors"] += 1
+                self.metrics["api_errors"] += 1
                 self.circuit_breaker.record_failure()
-        
+
         return sections
     
     def format_section_context(self, sections: List[Dict]) -> str:
         """Format retrieved sections for context injection using actual schema"""
         context_parts = []
-        
+
         for section in sections:
             code_name = self.code_names.get(section['code'], section['code'])
-            
-            # Build hierarchical location
-            hierarchy_parts = []
-            if section.get('division'):
-                hierarchy_parts.append(f"Division {section['division']}")
-            if section.get('part'):
-                hierarchy_parts.append(f"Part {section['part']}")
-            if section.get('chapter'):
-                hierarchy_parts.append(f"Chapter {section['chapter']}")
-            if section.get('article'):
-                hierarchy_parts.append(f"Article {section['article']}")
-            
-            hierarchy_str = " > ".join(hierarchy_parts) if hierarchy_parts else "N/A"
-            
+            is_multi = section.get('is_multi_version', False)
+
+            # Build header
+            if is_multi:
+                total_versions = section.get('total_versions', 0)
+                header = f"**California {code_name} Code § {section['section']}** ({total_versions} versions)"
+            else:
+                header = f"**California {code_name} Code § {section['section']}**"
+
+            # Build hierarchical location (only for single-version sections)
+            hierarchy_str = "N/A"
+            if not is_multi:
+                hierarchy_parts = []
+                if section.get('division'):
+                    hierarchy_parts.append(f"Division {section['division']}")
+                if section.get('part'):
+                    hierarchy_parts.append(f"Part {section['part']}")
+                if section.get('chapter'):
+                    hierarchy_parts.append(f"Chapter {section['chapter']}")
+                if section.get('article'):
+                    hierarchy_parts.append(f"Article {section['article']}")
+                hierarchy_str = " > ".join(hierarchy_parts) if hierarchy_parts else "N/A"
+
             formatted = f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-**California {code_name} Code § {section['section']}**
+{header}
 Location: {hierarchy_str}
 
 {section['content']}
 """
             if self.valves.enable_legislative_history and section.get('legislative_history'):
-                formatted += f"\nLegislative History: {section['legislative_history']}"
-            
+                formatted += f"\n\nLegislative History:\n{section['legislative_history']}"
+
             formatted += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             context_parts.append(formatted)
-        
+
         return "\n".join(context_parts)
+
+    def _build_verification_summary(
+        self,
+        verified_citations: List[Dict],
+        hallucinations_found: List[Dict],
+        verified_from_inlet: List[Dict]
+    ) -> str:
+        """
+        Build verification summary section for double confirmation (v2.6.11)
+
+        Args:
+            verified_citations: List of citations verified in outlet
+            hallucinations_found: List of unverified/hallucinated citations
+            verified_from_inlet: List of sections verified in inlet
+
+        Returns:
+            Formatted verification summary string
+        """
+        summary_lines = []
+
+        summary_lines.append("---")
+        summary_lines.append("")
+        summary_lines.append("### 📋 Verification Summary")
+        summary_lines.append("")
+
+        # Show verified citations
+        if verified_citations:
+            summary_lines.append(f"**✓ Verified Citations ({len(verified_citations)}):**")
+            summary_lines.append("")
+            summary_lines.append("| Citation | Code | Section | Status |")
+            summary_lines.append("|----------|------|---------|--------|")
+
+            for cite in verified_citations:
+                code_name = cite.get('code_name', cite['code'])
+                summary_lines.append(
+                    f"| {cite['citation']} | California {code_name} Code | {cite['section']} | ✓ Verified |"
+                )
+
+            summary_lines.append("")
+
+        # Show inlet-verified sections (for double confirmation)
+        if verified_from_inlet:
+            summary_lines.append("**Database Retrieval:**")
+            summary_lines.append("")
+            for section in verified_from_inlet:
+                code_name = section.get('code_name', section['code'])
+                summary_lines.append(
+                    f"- **{section['code']} {section['section']}** → California {code_name} Code Section {section['section']} ✓"
+                )
+            summary_lines.append("")
+
+        # Show hallucinations if any
+        if hallucinations_found:
+            summary_lines.append(f"**⚠️ Unverified Citations ({len(hallucinations_found)}):**")
+            summary_lines.append("")
+            summary_lines.append("| Citation | Code | Section | Status |")
+            summary_lines.append("|----------|------|---------|--------|")
+
+            for cite in hallucinations_found:
+                summary_lines.append(
+                    f"| {cite['citation']} | {cite['code']} | {cite['section']} | ⚠️ Not Found |"
+                )
+
+            summary_lines.append("")
+
+        # Only show validation status if there are hallucinations
+        if hallucinations_found:
+            total = len(verified_citations) + len(hallucinations_found)
+            summary_lines.append(
+                f"**⚠️ Validation Status:** {len(verified_citations)}/{total} citations verified"
+            )
+            summary_lines.append("")
+
+        return "\n".join(summary_lines)
     
     async def inlet(
         self,
@@ -883,7 +1109,7 @@ Location: {hierarchy_str}
         __model__: Optional[dict] = None,
     ) -> dict:
         """Pre-process user queries to detect direct citation requests"""
-        logger.info("[INLET v2.6.7] Processing query...")
+        logger.info("[INLET v2.7.5] Processing query...")
         self.metrics["total_queries"] += 1
         self._update_cache_config()
 
@@ -893,7 +1119,12 @@ Location: {hierarchy_str}
                 return body
             
             user_message = messages[-1].get("content", "")
-            
+
+            # DEBUG: Log the EXACT user message received
+            logger.info(f"[INLET-DEBUG] Raw user message: '{user_message}'")
+            logger.info(f"[INLET-DEBUG] Message length: {len(user_message)}")
+            logger.info(f"[INLET-DEBUG] Message type: {type(user_message)}")
+
             # QUICK WIN #1: Skip processing for short/non-legal messages
             should_skip, skip_reason = self._should_skip_processing(user_message)
             if should_skip:
@@ -974,14 +1205,14 @@ Location: {hierarchy_str}
                     verified_codes = [f"**{s['code']} {s['section']} ✓**" for s in exact_sections]
                     code_name = exact_sections[0].get('code_name', exact_sections[0]['code'])
 
-                    # Create a concise enriched message for faster LLM responses
-                    enriched_message = f"""Here is the official legal text from the California codes database:
+                    # Create a balanced enriched message - complete but not overly verbose
+                    enriched_message = f"""I have retrieved the following official legal text from the California codes database:
 
 {context}
 
-Question: {self.sanitize_user_input(user_message)}
+User's question: {self.sanitize_user_input(user_message)}
 
-Answer directly from the text above. Start with "**California {code_name} Code Section {exact_sections[0]['section']} ✓**" and be concise."""
+IMPORTANT: You MUST use the legal text provided above to answer. DO NOT say you cannot access or provide this content - it has already been retrieved for you. Start your response with "**California {code_name} Code Section {exact_sections[0]['section']} ✓**" followed by the full content and legislative history shown above."""
                     
                     messages[-1]["content"] = enriched_message
 
@@ -1062,10 +1293,10 @@ Answer directly from the text above. Start with "**California {code_name} Code S
         """
         # CRITICAL: Return immediately if disabled
         if not self.valves.enable_post_validation:
-            logger.info("[OUTLET v2.6.7] Post-validation DISABLED - skipping outlet processing")
+            logger.info("[OUTLET v2.7.5] Post-validation DISABLED - skipping outlet processing")
             return body
 
-        logger.info("[OUTLET v2.6.7] ===== POST-VALIDATION STARTING =====")
+        logger.info("[OUTLET v2.7.5] ===== POST-VALIDATION STARTING =====")
         
         # CRITICAL: Skip outlet for streaming responses to avoid freezing
         if isinstance(body, dict) and body.get("stream", False):
@@ -1166,12 +1397,20 @@ Answer directly from the text above. Start with "**California {code_name} Code S
                         f"there is no section {section_num} in the {code_name.lower()} code",
                         f"section {section_num} does not exist",
                         f"no such section as {section_num}",
-                        
+
+                        # Access denial patterns (LLM ignoring provided content)
+                        f"cannot provide the text of {code_name.lower()} code section {section_num}",
+                        f"cannot provide {code_name.lower()} code section {section_num}",
+                        f"cannot access {code_name.lower()} code section {section_num}",
+                        f"do not have access to {code_name.lower()} code section {section_num}",
+                        f"don't have {code_name.lower()} code section {section_num}",
+                        f"none contain the actual text of {code_name.lower()} code section {section_num}",
+
                         # Code misattribution patterns (high confidence) - now uses regex for flexibility
                         f"section {section_num} belongs to the (family|penal|civil|evidence) code",
                         f"section {section_num} is part of the (family|penal|civil|evidence) code",
                         f"this section is in the (family|penal|civil|evidence) code",
-                        
+
                         # Explicit corrections (high confidence)
                         f"this is incorrect",
                         f"this is wrong",
@@ -1206,9 +1445,13 @@ The AI model's response contradicted verified database information. Here is the 
 - Query: `code='{code}' AND section='{section_num}'`
 - Status: FOUND ✓ in official California {code_name} Code database
 - This section definitively exists in the {code_name} Code
+- Source: https://www.codecond.com/api/v2/codes/{code}/sections/{section_num}
+
+**Official Resource:**
+You can always access verified California legal code sections at **https://www.codecond.com**
 
 **Note:** The original AI response incorrectly stated this section didn't exist or belonged to a different code. This has been corrected using the authoritative database source."""
-                        
+
                         # Force the corrected message
                         messages[-1]["content"] = correction_message
                         body["messages"] = messages
@@ -1234,7 +1477,13 @@ The AI model's response contradicted verified database information. Here is the 
             
             # Extract all citations from the response
             citations = self.extract_citations(assistant_message)
-            
+
+            # Debug: Log extracted citations
+            if citations:
+                logger.info(f"[OUTLET] Extracted {len(citations)} citations from response:")
+                for cite in citations:
+                    logger.info(f"  - {cite['code']} {cite['section']} (full: {cite['full_citation']})")
+
             if citations:
                 # Show validation status
                 if self.valves.show_status and __event_emitter__:
@@ -1273,12 +1522,39 @@ The AI model's response contradicted verified database information. Here is the 
                             "code_name": section_map[key].get("code_name", citation["code"])
                         })
 
-                        # Make it BOLD and add checkmark for visibility
-                        validated_response = validated_response.replace(
-                            citation["full_citation"],
-                            f"**{citation['full_citation']} ✓**",
-                            1  # Replace only first occurrence
-                        )
+                        # Bold the citation and add checkmark if not already present
+                        citation_text = citation["full_citation"]
+                        citation_pos = validated_response.find(citation_text)
+
+                        if citation_pos != -1:
+                            # Check context around citation for existing checkmark
+                            context_start = max(0, citation_pos - 10)
+                            context_end = min(len(validated_response), citation_pos + len(citation_text) + 10)
+                            context = validated_response[context_start:context_end]
+
+                            # If checkmark already exists nearby, just bold the text
+                            if " ✓" in context:
+                                # Find the full citation phrase including any existing checkmark
+                                # Look for pattern like "California Evidence Code Section 761 ✓"
+                                import re as re_module
+                                # Match citation possibly with checkmark
+                                pattern = re_module.escape(citation_text) + r'(\s*✓)?'
+                                match = re_module.search(pattern, validated_response)
+                                if match:
+                                    original_text = match.group(0)
+                                    # Bold it, keeping the checkmark
+                                    validated_response = validated_response.replace(
+                                        original_text,
+                                        f"**{citation_text} ✓**",
+                                        1
+                                    )
+                            else:
+                                # No checkmark exists, add both bold and checkmark
+                                validated_response = validated_response.replace(
+                                    citation_text,
+                                    f"**{citation_text} ✓**",
+                                    1
+                                )
                     else:
                         # Citation does not exist in database - flag it
                         hallucinations_found.append({
@@ -1295,8 +1571,15 @@ The AI model's response contradicted verified database information. Here is the 
                             1
                         )
                 
-                # FAST MODE - Just inline badges, no banner/summary (v2.6.7)
-                verification_display = validated_response
+                # v2.6.11: Add verification summary section for double confirmation
+                verification_summary = self._build_verification_summary(
+                    verified_citations,
+                    hallucinations_found,
+                    verified_from_inlet
+                )
+
+                # Append summary to response
+                verification_display = validated_response + "\n\n" + verification_summary
 
                 logger.info(f"[OUTLET] Verified: {verified_count}, Hallucinations: {len(hallucinations_found)}")
 
