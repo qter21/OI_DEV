@@ -1,10 +1,31 @@
 """
 title: California Legal Code Citation Validator
 author: Legal AI Team
-version: 2.7.5
+version: 2.7.7
 description: Production-ready filter for hallucination-free legal citations using CodeCond API
 required_open_webui_version: 0.3.0
 requirements: httpx>=0.24.0
+
+🔧 CRITICAL FIX (v2.7.7):
+- Fixed "Not Found" errors when API is actually working
+- **Issue:** All citations showing as "Not Found" despite API returning data successfully
+- **Root causes identified:**
+  1. HTTP client not initializing properly (on_startup not called or failing silently)
+  2. 5-second timeout too aggressive for validating multiple citations
+  3. Circuit breaker blocking retries after initial failures
+- **Solutions applied:**
+  1. Robust lazy initialization with detailed error logging
+  2. Per-citation timeout scaling (5s per citation, cap at 30s total)
+  3. API connectivity test on startup with detailed diagnostics
+  4. Enhanced logging at every failure point for easier debugging
+- Now properly validates citations and shows "✓ Verified" status
+
+🔧 CRITICAL FIX (v2.7.6):
+- Simplified prompt injection to eliminate LLM defensive behavior
+- **Issue:** LLM claiming "I cannot provide the specific text..." despite having it in context
+- **Root cause:** Complex meta-instructions ("DO NOT say...") triggered defensive responses
+- **Solution:** Direct injection - append legal text to user query with no instructions
+- Now LLM treats retrieved text as user-provided context (natural, no hedging)
 
 🔧 CRITICAL FIX (v2.7.5):
 - Increased priority from 10 → 100 (maximum) to run before Prompt Enhancer filter
@@ -446,7 +467,7 @@ class Filter:
         """Initialize HTTP client for API calls"""
         # LOG VERSION IMMEDIATELY ON STARTUP
         logger.info("=" * 80)
-        logger.info("🔧 California Legal Citation Validator v2.7.5 - STARTING UP")
+        logger.info("🔧 California Legal Citation Validator v2.7.7 - STARTING UP")
         logger.info("=" * 80)
 
         try:
@@ -457,6 +478,18 @@ class Filter:
                 limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
                 follow_redirects=True
             )
+
+            # Verify HTTP client is working with a test request
+            try:
+                logger.info("[INIT] Testing API connectivity...")
+                test_response = await self.http_client.get("/codes/CCP/sections/1")
+                if test_response.status_code in [200, 404]:  # Both are valid responses
+                    logger.info(f"[INIT] ✓ API connectivity verified (HTTP {test_response.status_code})")
+                else:
+                    logger.warning(f"[INIT] ⚠️ API returned unexpected status: {test_response.status_code}")
+            except Exception as test_err:
+                logger.warning(f"[INIT] ⚠️ API connectivity test failed: {test_err}")
+                logger.warning("[INIT] Will attempt to use API anyway...")
 
             # Log initialization
             logger.info(f"✓ HTTP client initialized for {self.valves.api_base_url}")
@@ -470,6 +503,9 @@ class Filter:
         except Exception as e:
             logger.error(f"✗ HTTP client initialization failed: {e}")
             logger.error(f"  Base URL: {self.valves.api_base_url}")
+            logger.error(f"  Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"  Traceback:\n{traceback.format_exc()}")
             self.circuit_breaker.record_failure()
 
     async def on_shutdown(self):
@@ -800,7 +836,9 @@ Return ONLY valid JSON in this exact format:
         # Check circuit breaker
         if not self.circuit_breaker.can_proceed():
             self.metrics["circuit_breaker_blocks"] += 1
-            logger.warning("Circuit breaker OPEN - skipping API lookup")
+            logger.warning("[API BLOCKED] Circuit breaker OPEN - skipping API lookup")
+            logger.warning(f"[API BLOCKED] Circuit breaker state: {self.circuit_breaker.get_state()}")
+            logger.warning(f"[API BLOCKED] Failures: {self.circuit_breaker.failures}")
             if __event_emitter__:
                 await __event_emitter__({
                     "type": "status",
@@ -813,18 +851,32 @@ Return ONLY valid JSON in this exact format:
 
         # Ensure HTTP client exists
         if self.http_client is None:
-            logger.warning("HTTP client not initialized, initializing...")
-            await self.on_startup()
+            logger.warning("[API INIT] HTTP client not initialized, initializing now...")
+            try:
+                await self.on_startup()
+                if self.http_client is None:
+                    logger.error("[API INIT] FAILED - HTTP client still None after on_startup()")
+                    return []
+                logger.info("[API INIT] ✓ HTTP client successfully initialized")
+            except Exception as e:
+                logger.error(f"[API INIT] FAILED with exception: {e}")
+                return []
+
+        # Use per-citation timeout instead of total timeout to avoid issues with multiple citations
+        # Total timeout = api_timeout_seconds * number of citations (but cap at 30s)
+        total_timeout = min(self.valves.api_timeout_seconds * len(citations), 30)
+        logger.info(f"[API FETCH] Fetching {len(citations)} citations with {total_timeout}s total timeout")
 
         # Wrap API operations with timeout
         try:
             sections = await asyncio.wait_for(
                 self._fetch_sections_internal(citations, __event_emitter__),
-                timeout=self.valves.api_timeout_seconds
+                timeout=total_timeout
             )
+            logger.info(f"[API FETCH] ✓ Successfully fetched {len(sections)}/{len(citations)} sections")
             return sections
         except asyncio.TimeoutError:
-            logger.error(f"API request timeout after {self.valves.api_timeout_seconds}s")
+            logger.error(f"[API FETCH] ✗ TIMEOUT after {total_timeout}s for {len(citations)} citations")
             self.metrics["api_errors"] += 1
             self.circuit_breaker.record_failure()
             if __event_emitter__:
@@ -869,10 +921,20 @@ Return ONLY valid JSON in this exact format:
                 section = citation["section"]
                 endpoint = f"/codes/{code}/sections/{section}"
 
-                logger.info(f"[API CALL] GET {endpoint}")
+                logger.info(f"[API CALL] GET {endpoint} (for citation: {citation['full_citation']})")
+                
+                # DEBUG: Log HTTP client state
+                if self.http_client is None:
+                    logger.error(f"[API CALL] ✗ HTTP client is None!")
+                    continue
 
                 # Make HTTP request
-                response = await self.http_client.get(endpoint)
+                try:
+                    response = await self.http_client.get(endpoint)
+                    logger.info(f"[API CALL] Response status: {response.status_code}")
+                except Exception as http_err:
+                    logger.error(f"[API CALL] ✗ Request failed: {http_err}")
+                    raise
 
                 # Check response status
                 if response.status_code == 200:
@@ -1109,7 +1171,7 @@ Location: {hierarchy_str}
         __model__: Optional[dict] = None,
     ) -> dict:
         """Pre-process user queries to detect direct citation requests"""
-        logger.info("[INLET v2.7.5] Processing query...")
+        logger.info("[INLET v2.7.7] Processing query...")
         self.metrics["total_queries"] += 1
         self._update_cache_config()
 
@@ -1200,19 +1262,15 @@ Location: {hierarchy_str}
                 if exact_sections:
                     # NEW APPROACH: Format as if assistant is continuing from verified facts
                     context = self.format_section_context(exact_sections)
-                    
+
                     # Build verified statement with user-friendly formatting
                     verified_codes = [f"**{s['code']} {s['section']} ✓**" for s in exact_sections]
                     code_name = exact_sections[0].get('code_name', exact_sections[0]['code'])
 
-                    # Create a balanced enriched message - complete but not overly verbose
-                    enriched_message = f"""I have retrieved the following official legal text from the California codes database:
+                    # Append retrieved legal text directly to user query (most natural approach)
+                    enriched_message = f"""{self.sanitize_user_input(user_message)}
 
-{context}
-
-User's question: {self.sanitize_user_input(user_message)}
-
-IMPORTANT: You MUST use the legal text provided above to answer. DO NOT say you cannot access or provide this content - it has already been retrieved for you. Start your response with "**California {code_name} Code Section {exact_sections[0]['section']} ✓**" followed by the full content and legislative history shown above."""
+{context}"""
                     
                     messages[-1]["content"] = enriched_message
 
@@ -1293,10 +1351,10 @@ IMPORTANT: You MUST use the legal text provided above to answer. DO NOT say you 
         """
         # CRITICAL: Return immediately if disabled
         if not self.valves.enable_post_validation:
-            logger.info("[OUTLET v2.7.5] Post-validation DISABLED - skipping outlet processing")
+            logger.info("[OUTLET v2.7.7] Post-validation DISABLED - skipping outlet processing")
             return body
 
-        logger.info("[OUTLET v2.7.5] ===== POST-VALIDATION STARTING =====")
+        logger.info("[OUTLET v2.7.7] ===== POST-VALIDATION STARTING =====")
         
         # CRITICAL: Skip outlet for streaming responses to avoid freezing
         if isinstance(body, dict) and body.get("stream", False):
